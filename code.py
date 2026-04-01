@@ -168,7 +168,6 @@ print(nodes_map)
 
 liste_routeurs = sorted(list(nodes_map.values()), key=get_id)
 
-# IPv4 : on supprime "ipv6 unicast-routing", on garde juste "ip cef"
 configs = {r: f"! Config {r}\nip cef\n" for r in liste_routeurs}
 interfaces_actives = {r: [] for r in liste_routeurs}
 
