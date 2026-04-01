@@ -44,9 +44,12 @@ def get_router_role(router_name, intent):
 
 
 def get_router_intent(router_name):
-    for as_data in intent.get('as_list', []):
-        if router_name in as_data.get('routers', []):
-            return as_data
+    if router_name in provider_routers:
+        role = 'PE' if 'PE' in router_name else 'P'
+        return {"asn": provider_asn, "role": role}
+    for client in clients:
+        if client['ce_router'] == router_name:
+            return {"asn": client['ce_asn'], "role": "CE", "client": client['name'], "vrf": client['vrf_name'], "pe": client['pe_router']}
     return None
 
 def loopback_ip(router_name, intent):
@@ -154,12 +157,17 @@ with open(FICHIER_GNS3, 'r') as f:
 with open(FICHIER_INTENT, 'r') as f:
     intent = json.load(f)
 
+# Parse new intent format
+provider_asn = intent.get('provider_asn', 67)
+provider_routers = intent.get('provider_routers', [])
+clients = intent.get('clients', [])
+communication = intent.get('communication', [])
+
 nodes_map = {node['node_id']: node['name'] for node in gns3_data['topology']['nodes']}
 print(nodes_map)
 
 liste_routeurs = sorted(list(nodes_map.values()), key=get_id)
 
-# IPv4 : on supprime "ipv6 unicast-routing", on garde juste "ip cef"
 configs = {r: f"! Config {r}\nip cef\n" for r in liste_routeurs}
 interfaces_actives = {r: [] for r in liste_routeurs}
 
@@ -176,6 +184,37 @@ for r in liste_routeurs:
     configs[r] += f"interface Loopback0\n"
     configs[r] += f" ip address {lb_ip} 255.255.255.255\n"
     configs[r] += " no shutdown\n exit\n"
+
+
+# -----------------------------------------------------------------------
+print("1.5. Configuration VRFs...")
+# -----------------------------------------------------------------------
+for r in liste_routeurs:
+    data = get_router_intent(r)
+    if not data or data['role'] != 'PE': continue
+
+    for client in clients:
+        if client['pe_router'] != r: continue
+
+        # Calculate import RTs
+        import_rts = [client['rt']]
+        for comm_group in communication:
+            if client['name'] in comm_group:
+                for other_name in comm_group:
+                    if other_name != client['name']:
+                        for other_client in clients:
+                            if other_client['name'] == other_name:
+                                import_rts.append(other_client['rt'])
+        import_rts = list(set(import_rts))  # unique
+
+        configs[r] += f"vrf definition {client['vrf_name']}\n"
+        configs[r] += f" rd {client['rd']}\n"
+        for rt in import_rts:
+            configs[r] += f" route-target import {rt}\n"
+        configs[r] += f" route-target export {client['rt']}\n"
+        configs[r] += " address-family ipv4\n"
+        configs[r] += " exit-address-family\n"
+        configs[r] += "!\n"
 
 
 # -----------------------------------------------------------------------
@@ -198,11 +237,16 @@ for link in gns3_data['topology']['links']:
     int_b = format_interface(node_b['adapter_number'], node_b['port_number'])
 
     configs[name_a] += (f"interface {int_a}\n"
-                        f" ip address {ip_a} 255.255.255.252\n"
-                        f" no shutdown\n exit\n")
+                        f" ip address {ip_a} 255.255.255.252\n")
+    if data_a and data_a['role'] == 'PE' and data_b and data_b['role'] == 'CE':
+        configs[name_a] += f" vrf forwarding {data_b['vrf']}\n"
+    configs[name_a] += " no shutdown\n exit\n"
+
     configs[name_b] += (f"interface {int_b}\n"
-                        f" ip address {ip_b} 255.255.255.252\n"
-                        f" no shutdown\n exit\n")
+                        f" ip address {ip_b} 255.255.255.252\n")
+    if data_b and data_b['role'] == 'PE' and data_a and data_a['role'] == 'CE':
+        configs[name_b] += f" vrf forwarding {data_a['vrf']}\n"
+    configs[name_b] += " no shutdown\n exit\n"
 
     interfaces_actives[name_a].append(int_a)
     interfaces_actives[name_b].append(int_b)
@@ -275,9 +319,7 @@ for r in liste_routeurs:
     data = get_router_intent(r)
     if not data: continue
 
-    role = get_router_role(r, intent)
-    if role not in ('PE', 'CE'): continue
-
+    role = data['role']
     asn = data['asn']
     bgp_rid = loopback_ip(r, intent)
 
@@ -285,17 +327,20 @@ for r in liste_routeurs:
     configs[r] += f"router bgp {asn}\n"
     configs[r] += f" bgp router-id {bgp_rid}\n"
 
+    if role == 'PE':
+        configs[r] += " no bgp default ipv4-unicast\n"
+
     # iBGP for PE
     if role == 'PE':
-        for other in data['routers']:
+        for other in provider_routers:
             if other == r: continue
-            other_role = get_router_role(other, intent)
-            if other_role == 'PE':
+            other_data = get_router_intent(other)
+            if other_data and other_data['role'] == 'PE':
                 n_ip = loopback_ip(other, intent)
                 configs[r] += f" neighbor {n_ip} remote-as {asn}\n"
                 configs[r] += f" neighbor {n_ip} update-source Loopback0\n"
 
-    # eBGP
+    # eBGP neighbors
     for link in gns3_data['topology']['links']:
         node_a_id = link['nodes'][0]['node_id']
         node_b_id = link['nodes'][1]['node_id']
@@ -321,48 +366,83 @@ for r in liste_routeurs:
 
     # address-family ipv4 unicast
     configs[r] += " address-family ipv4 unicast\n"
-    as_prefix = data.get('prefix', '')
-    if as_prefix:
-        configs[r] += f"  network {as_prefix}.0.0 mask 255.255.0.0\n"
-    # activate eBGP neighbors
-    for link in gns3_data['topology']['links']:
-        node_a_id = link['nodes'][0]['node_id']
-        node_b_id = link['nodes'][1]['node_id']
-        name_a, name_b = nodes_map[node_a_id], nodes_map[node_b_id]
+    if role == 'CE':
+        # Find the client
+        client_name = data['client']
+        for c in clients:
+            if c['name'] == client_name:
+                link_subnet = c['link_subnet']
+                configs[r] += f"  network {link_subnet}\n"
+                break
+        # activate eBGP neighbor (PE)
+        for link in gns3_data['topology']['links']:
+            node_a_id = link['nodes'][0]['node_id']
+            node_b_id = link['nodes'][1]['node_id']
+            name_a, name_b = nodes_map[node_a_id], nodes_map[node_b_id]
 
-        if name_a == r:
-            neighbor_name = name_b
-        elif name_b == r:
-            neighbor_name = name_a
-        else:
-            continue
+            if name_a == r:
+                neighbor_name = name_b
+            elif name_b == r:
+                neighbor_name = name_a
+            else:
+                continue
 
-        neighbor_data = get_router_intent(neighbor_name)
-        if not neighbor_data or neighbor_data['asn'] == asn:
-            continue
+            neighbor_data = get_router_intent(neighbor_name)
+            if not neighbor_data or neighbor_data['asn'] == asn:
+                continue
 
-        ip_me, ip_neighbor = link_ips(r, neighbor_name, intent)
-        if name_b == r:
-            ip_me, ip_neighbor = link_ips(neighbor_name, r, intent)
-            ip_me, ip_neighbor = ip_neighbor, ip_me
+            ip_me, ip_neighbor = link_ips(r, neighbor_name, intent)
+            if name_b == r:
+                ip_me, ip_neighbor = link_ips(neighbor_name, r, intent)
+                ip_me, ip_neighbor = ip_neighbor, ip_me
 
-        configs[r] += f"  neighbor {ip_neighbor} activate\n"
-        configs[r] += f"  neighbor {ip_neighbor} send-community\n"
-
+            configs[r] += f"  neighbor {ip_neighbor} activate\n"
+            configs[r] += f"  neighbor {ip_neighbor} send-community\n"
     configs[r] += " exit-address-family\n"
 
     if role == 'PE':
+        # VPNv4 for iBGP
         configs[r] += " address-family vpnv4\n"
-        # activate iBGP neighbors
-        for other in data['routers']:
+        for other in provider_routers:
             if other == r: continue
-            other_role = get_router_role(other, intent)
-            if other_role == 'PE':
+            other_data = get_router_intent(other)
+            if other_data and other_data['role'] == 'PE':
                 n_ip = loopback_ip(other, intent)
                 configs[r] += f"  neighbor {n_ip} activate\n"
                 configs[r] += f"  neighbor {n_ip} send-community\n"
                 configs[r] += f"  neighbor {n_ip} next-hop-self\n"
         configs[r] += " exit-address-family\n"
+
+        # VRF address families
+        for client in clients:
+            if client['pe_router'] != r: continue
+            vrf = client['vrf_name']
+            configs[r] += f" address-family ipv4 vrf {vrf}\n"
+            # network the link subnet
+            link_subnet = client['link_subnet']
+            configs[r] += f"  network {link_subnet}\n"
+            # activate eBGP neighbor
+            for link in gns3_data['topology']['links']:
+                node_a_id = link['nodes'][0]['node_id']
+                node_b_id = link['nodes'][1]['node_id']
+                name_a, name_b = nodes_map[node_a_id], nodes_map[node_b_id]
+
+                if name_a == r:
+                    neighbor_name = name_b
+                elif name_b == r:
+                    neighbor_name = name_a
+                else:
+                    continue
+
+                neighbor_data = get_router_intent(neighbor_name)
+                if neighbor_data and neighbor_data['role'] == 'CE' and neighbor_data['client'] == client['name']:
+                    ip_me, ip_neighbor = link_ips(r, neighbor_name, intent)
+                    if name_b == r:
+                        ip_me, ip_neighbor = link_ips(neighbor_name, r, intent)
+                        ip_me, ip_neighbor = ip_neighbor, ip_me
+                    configs[r] += f"  neighbor {ip_neighbor} activate\n"
+                    configs[r] += f"  neighbor {ip_neighbor} send-community\n"
+            configs[r] += " exit-address-family\n"
 
     configs[r] += " exit\n"
 
