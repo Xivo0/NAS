@@ -253,7 +253,7 @@ for link in gns3_data['topology']['links']:
 
 
 # -----------------------------------------------------------------------
-print("4. Configuration MPLS et LDP...")
+print("3. Configuration MPLS et LDP...")
 # -----------------------------------------------------------------------
 for r in liste_routeurs:
     data = get_router_intent(r)
@@ -269,7 +269,7 @@ for r in liste_routeurs:
 
 
 # -----------------------------------------------------------------------
-print("3. Configuration BGP...")
+print("4. Configuration BGP...")
 # -----------------------------------------------------------------------
 for r in liste_routeurs:
     data = get_router_intent(r)
