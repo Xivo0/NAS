@@ -19,15 +19,13 @@ def format_interface(adapter, port):
         return f"FastEthernet{adapter}/{port}"
 
 
-
-_subnet_counter_mpls  = -1   # 10.1.x.0/30
-_subnet_counter_ce    = -1   # 192.168.x.0/30
-_subnet_cache = {}          # cache (frozenset{nameA, nameB}) -> (subnet_base, prefixe_str), évite les doublons
-_subnet_counter_mpls_link = 0 # pour économiser optimiser la plage d'addresses des liens
+_subnet_counter_mpls  = -1
+_subnet_counter_ce    = -1
+_subnet_cache = {}
+_subnet_counter_mpls_link = 0
 _subnet_counter_ce_link = 0
 
 def get_router_role(router_name, intent):
-    
     for as_data in intent.get('as_list', []):
         if router_name in as_data.get('routers', []):
             role = as_data.get('role', '').upper()
@@ -50,7 +48,6 @@ def get_router_intent(router_name):
     return None
 
 def loopback_ip(router_name, intent):
-    
     rid = get_id(router_name)
     role = get_router_role(router_name, intent)
     if role == 'P':
@@ -65,7 +62,7 @@ def loopback_ip(router_name, intent):
             return f"10.123.{rid - 255}.255"
         else:
             return "plus assez de place"
-    else:  # CE
+    else:
         if rid <= 255:
             return f"10.255.0.{rid}"
         elif rid <= 510:
@@ -75,7 +72,6 @@ def loopback_ip(router_name, intent):
 
 
 def ospf_router_id(router_name, intent):
-   
     rid = get_id(router_name)
     role = get_router_role(router_name, intent)
     if role == 'P':
@@ -85,18 +81,16 @@ def ospf_router_id(router_name, intent):
             return f"10.0.{rid - 255}.255"
         else:
             return "plus assez de place"
-    else:  # PE
+    else:
         if rid <= 255:
             return f"1.0.0.{rid}"
         elif rid <= 510:
             return f"1.0.{rid - 255}.255"
         else:
             return "plus assez de place"
-        
 
 
 def get_link_subnet(name_a, name_b, role_a, role_b, intent):
-    
     global _subnet_counter_mpls, _subnet_counter_ce, _subnet_counter_mpls_link, _subnet_counter_ce_link
 
     key = frozenset([name_a, name_b])
@@ -105,15 +99,13 @@ def get_link_subnet(name_a, name_b, role_a, role_b, intent):
 
     mpls_roles = {'P', 'PE'}
     if role_a in mpls_roles and role_b in mpls_roles:
-        # lien intra-MPLS
-        if _subnet_counter_mpls_link == 0%64: # on incrémente le compteur de sous-réseaux MPLS tous les 64 liens pour optimiser la plage d'adresses
+        if _subnet_counter_mpls_link == 0%64:
             _subnet_counter_mpls += 1
-        n = _subnet_counter_mpls 
-        base = f"10.1.{n}"    
+        n = _subnet_counter_mpls
+        base = f"10.1.{n}"
         is_ce = False
     else:
-        # lien PE-CE
-        if _subnet_counter_ce_link == 0%64: # on incrémente le compteur de sous-réseaux CE tous les 64 liens pour optimiser la plage d'adresses
+        if _subnet_counter_ce_link == 0%64:
             _subnet_counter_ce += 1
         n = _subnet_counter_ce
         base = f"192.168.{n}"
@@ -124,7 +116,6 @@ def get_link_subnet(name_a, name_b, role_a, role_b, intent):
 
 
 def link_ips(name_a, name_b, intent):
-    
     global _subnet_counter_mpls_link, _subnet_counter_ce_link
 
     rid_a = get_id(name_a)
@@ -136,13 +127,61 @@ def link_ips(name_a, name_b, intent):
     if rid_a < rid_b:
         n_a = _subnet_counter_mpls_link + 1
         n_b = _subnet_counter_mpls_link + 2
-        _subnet_counter_mpls_link = (_subnet_counter_mpls_link + 4) % 256 
+        _subnet_counter_mpls_link = (_subnet_counter_mpls_link + 4) % 256
         return (f"{base}.{n_a}", f"{base}.{n_b}")
     else:
         n_a = _subnet_counter_ce_link + 2
         n_b = _subnet_counter_ce_link + 1
         _subnet_counter_ce_link = (_subnet_counter_ce_link + 4) % 256
         return (f"{base}.{n_a}", f"{base}.{n_b}")
+
+
+def get_vrf_list(intent):
+    return intent.get('vrf_list', [])
+
+
+def get_vrf_for_link(pe_name, ce_name, intent):
+    for assignment in intent.get('vrf_assignments', []):
+        if assignment['pe'] == pe_name and assignment['ce'] == ce_name:
+            return assignment['vrf']
+    return None
+
+
+def generate_vrf_config(intent):
+    vrf_configs = {}
+    vrf_list = get_vrf_list(intent)
+    if not vrf_list:
+        return vrf_configs
+
+    for r in liste_routeurs:
+        role = get_router_role(r, intent)
+        if role != 'PE':
+            continue
+
+        pe_vrfs = set()
+        for assignment in intent.get('vrf_assignments', []):
+            if assignment['pe'] == r:
+                pe_vrfs.add(assignment['vrf'])
+
+        if not pe_vrfs:
+            continue
+
+        cfg = ""
+        for vrf in vrf_list:
+            if vrf['name'] not in pe_vrfs:
+                continue
+            cfg += f"vrf definition {vrf['name']}\n"
+            cfg += f" rd {vrf['rd']}\n"
+            cfg += f" route-target export {vrf['rt_export']}\n"
+            cfg += f" route-target import {vrf['rt_import']}\n"
+            cfg += f" !\n"
+            cfg += f" address-family ipv4\n"
+            cfg += f" exit-address-family\n"
+            cfg += f"!\n"
+
+        vrf_configs[r] = cfg
+
+    return vrf_configs
 
 
 if not os.path.exists(FICHIER_GNS3) or not os.path.exists(FICHIER_INTENT):
@@ -159,9 +198,16 @@ print(nodes_map)
 
 liste_routeurs = sorted(list(nodes_map.values()), key=get_id)
 
-# IPv4 : on supprime "ipv6 unicast-routing", on garde juste "ip cef"
 configs = {r: f"! Config {r}\nip cef\n" for r in liste_routeurs}
 interfaces_actives = {r: [] for r in liste_routeurs}
+
+
+# -----------------------------------------------------------------------
+print("0. Configuration des VRF...")
+# -----------------------------------------------------------------------
+vrf_configs = generate_vrf_config(intent)
+for r, vrf_cfg in vrf_configs.items():
+    configs[r] += vrf_cfg
 
 
 # -----------------------------------------------------------------------
@@ -172,7 +218,6 @@ for r in liste_routeurs:
     if not data: continue
 
     lb_ip = loopback_ip(r, intent)
-
     configs[r] += f"interface Loopback0\n"
     configs[r] += f" ip address {lb_ip} 255.255.255.255\n"
     configs[r] += " no shutdown\n exit\n"
@@ -189,20 +234,35 @@ for link in gns3_data['topology']['links']:
 
     data_a = get_router_intent(name_a)
     data_b = get_router_intent(name_b)
-
     if not data_a or not data_b: continue
 
     ip_a, ip_b = link_ips(name_a, name_b, intent)
-
     int_a = format_interface(node_a['adapter_number'], node_a['port_number'])
     int_b = format_interface(node_b['adapter_number'], node_b['port_number'])
 
-    configs[name_a] += (f"interface {int_a}\n"
-                        f" ip address {ip_a} 255.255.255.252\n"
+    # MODIFIÉ — détection du rôle pour vrf forwarding
+    role_a = get_router_role(name_a, intent)
+    role_b = get_router_role(name_b, intent)
+
+    vrf_a = None
+    vrf_b = None
+    if role_a == 'PE' and role_b == 'CE':
+        vrf_a = get_vrf_for_link(name_a, name_b, intent)
+    elif role_b == 'PE' and role_a == 'CE':
+        vrf_b = get_vrf_for_link(name_b, name_a, intent)
+
+    configs[name_a] += f"interface {int_a}\n"
+    if vrf_a:
+        configs[name_a] += f" vrf forwarding {vrf_a}\n"
+    configs[name_a] += (f" ip address {ip_a} 255.255.255.252\n"
                         f" no shutdown\n exit\n")
-    configs[name_b] += (f"interface {int_b}\n"
-                        f" ip address {ip_b} 255.255.255.252\n"
+
+    configs[name_b] += f"interface {int_b}\n"
+    if vrf_b:
+        configs[name_b] += f" vrf forwarding {vrf_b}\n"
+    configs[name_b] += (f" ip address {ip_b} 255.255.255.252\n"
                         f" no shutdown\n exit\n")
+    # FIN MODIFIÉ
 
     interfaces_actives[name_a].append(int_a)
     interfaces_actives[name_b].append(int_b)
@@ -220,12 +280,10 @@ for r in liste_routeurs:
     configs[r] += (f"router ospf {proc}\n"
                    f" router-id {rid_str}\n"
                    f" exit\n")
-    # Loopback dans OSPF area 0
     configs[r] += (f"interface Loopback0\n"
                    f" ip ospf {proc} area 0\n"
                    f" exit\n")
 
-# Activation OSPF sur les liens physiques (intra-AS uniquement)
 print("   -> Activation OSPF sur les liens physiques...")
 for link in gns3_data['topology']['links']:
     node_a = link['nodes'][0]
@@ -236,7 +294,6 @@ for link in gns3_data['topology']['links']:
     data_a = get_router_intent(name_a)
     data_b = get_router_intent(name_b)
 
-    # Pour routeur A (lien interne à l'AS seulement)
     if data_a and data_b and data_a['asn'] == data_b['asn']:
         int_a = format_interface(node_a['adapter_number'], node_a['port_number'])
         int_b = format_interface(node_b['adapter_number'], node_b['port_number'])
@@ -245,7 +302,6 @@ for link in gns3_data['topology']['links']:
                             f" ip ospf 1 area 0\n"
                             f" mpls ip\n"
                             f"exit\n")
-
         configs[name_b] += (f"interface {int_b}\n"
                             f" ip ospf 1 area 0\n"
                             f" mpls ip\n"
@@ -285,7 +341,6 @@ for r in liste_routeurs:
     configs[r] += f"router bgp {asn}\n"
     configs[r] += f" bgp router-id {bgp_rid}\n"
 
-    # iBGP for PE
     if role == 'PE':
         for other in data['routers']:
             if other == r: continue
@@ -295,7 +350,6 @@ for r in liste_routeurs:
                 configs[r] += f" neighbor {n_ip} remote-as {asn}\n"
                 configs[r] += f" neighbor {n_ip} update-source Loopback0\n"
 
-    # eBGP
     for link in gns3_data['topology']['links']:
         node_a_id = link['nodes'][0]['node_id']
         node_b_id = link['nodes'][1]['node_id']
@@ -319,12 +373,11 @@ for r in liste_routeurs:
 
         configs[r] += f" neighbor {ip_neighbor} remote-as {neighbor_data['asn']}\n"
 
-    # address-family ipv4 unicast
     configs[r] += " address-family ipv4 unicast\n"
     as_prefix = data.get('prefix', '')
     if as_prefix:
         configs[r] += f"  network {as_prefix}.0.0 mask 255.255.0.0\n"
-    # activate eBGP neighbors
+
     for link in gns3_data['topology']['links']:
         node_a_id = link['nodes'][0]['node_id']
         node_b_id = link['nodes'][1]['node_id']
@@ -353,7 +406,6 @@ for r in liste_routeurs:
 
     if role == 'PE':
         configs[r] += " address-family vpnv4\n"
-        # activate iBGP neighbors
         for other in data['routers']:
             if other == r: continue
             other_role = get_router_role(other, intent)
@@ -363,6 +415,45 @@ for r in liste_routeurs:
                 configs[r] += f"  neighbor {n_ip} send-community\n"
                 configs[r] += f"  neighbor {n_ip} next-hop-self\n"
         configs[r] += " exit-address-family\n"
+
+        # AJOUTÉ — address-family ipv4 vrf par VRF portée par ce PE
+        pe_vrfs = {}
+        for link in gns3_data['topology']['links']:
+            node_a_id = link['nodes'][0]['node_id']
+            node_b_id = link['nodes'][1]['node_id']
+            name_a_l, name_b_l = nodes_map[node_a_id], nodes_map[node_b_id]
+
+            if name_a_l == r:
+                ce_candidate = name_b_l
+            elif name_b_l == r:
+                ce_candidate = name_a_l
+            else:
+                continue
+
+            if get_router_role(ce_candidate, intent) != 'CE':
+                continue
+
+            vrf_name = get_vrf_for_link(r, ce_candidate, intent)
+            if not vrf_name:
+                continue
+
+            ip_me, ip_ce = link_ips(r, ce_candidate, intent)
+            if name_b_l == r:
+                ip_me, ip_ce = link_ips(ce_candidate, r, intent)
+                ip_me, ip_ce = ip_ce, ip_me
+
+            ce_asn = get_router_intent(ce_candidate)['asn']
+            pe_vrfs.setdefault(vrf_name, []).append((ip_ce, ce_asn, ip_me))
+
+        for vrf_name, neighbors in pe_vrfs.items():
+            configs[r] += f" address-family ipv4 vrf {vrf_name}\n"
+            for ip_ce, ce_asn, ip_me in neighbors:
+                subnet = ".".join(ip_me.split(".")[:3]) + ".0"
+                configs[r] += f"  network {subnet} mask 255.255.255.252\n"
+                configs[r] += f"  neighbor {ip_ce} remote-as {ce_asn}\n"
+                configs[r] += f"  neighbor {ip_ce} activate\n"
+            configs[r] += " exit-address-family\n"
+        # FIN AJOUTÉ
 
     configs[r] += " exit\n"
 
