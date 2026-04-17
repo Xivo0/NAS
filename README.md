@@ -1,6 +1,6 @@
 # NAS
 
-MPLS/LDP a été implémenté.
+MPLS/LDP ainsi que les VRF avec CE ont été implémentés.
 
 OSPF:
 Router-id:
