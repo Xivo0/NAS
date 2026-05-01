@@ -1,0 +1,119 @@
+{
+    "project_name": "Projet_MPLS_IPv4",
+    "global_options": {},
+    "as_list": [
+        {
+            "asn": 67,
+            "role": "P",
+            "routers": [
+                "P1",
+                "P2",
+                "P3",
+                "PE1",
+                "PE2"
+            ]
+        },
+        {
+            "asn": 11,
+            "role": "CE",
+            "routers": [
+                "CE1"
+            ]
+        },
+        {
+            "asn": 12,
+            "role": "CE",
+            "routers": [
+                "CE2"
+            ]
+        },
+        {
+            "asn": 13,
+            "role": "CE",
+            "routers": [
+                "CE3"
+            ]
+        },
+        {
+            "asn": 14,
+            "role": "CE",
+            "routers": [
+                "CE4"
+            ]
+        }
+    ],
+    "vrfs": [],
+    "bgp_policies": {
+        "customer_community": "100:10",
+        "local_pref_customer": 200,
+        "local_pref_peer": 100,
+        "local_pref_provider": 50
+    },
+    "external_relationships": [
+        {
+            "nodes": [
+                "PE1",
+                "CE1"
+            ],
+            "relationship": "peer"
+        },
+        {
+            "nodes": [
+                "PE1",
+                "CE4"
+            ],
+            "relationship": "peer"
+        },
+        {
+            "nodes": [
+                "PE2",
+                "CE2"
+            ],
+            "relationship": "peer"
+        },
+        {
+            "nodes": [
+                "PE2",
+                "CE3"
+            ],
+            "relationship": "peer"
+        }
+    ],
+    "ospf_custom_metrics": [],
+    "vrf_list": [
+        {
+            "name": "Client_A",
+            "rd": "67:110",
+            "rt_export": "67:1000",
+            "rt_import": "67:1000"
+        },
+        {
+            "name": "Client_B",
+            "rd": "67:120",
+            "rt_export": "67:2000",
+            "rt_import": "67:2000"
+        }
+    ],
+    "vrf_assignments": [
+        {
+            "pe": "PE1",
+            "ce": "CE1",
+            "vrf": "Client_A"
+        },
+        {
+            "pe": "PE1",
+            "ce": "CE4",
+            "vrf": "Client_B"
+        },
+        {
+            "pe": "PE2",
+            "ce": "CE2",
+            "vrf": "Client_B"
+        },
+        {
+            "pe": "PE2",
+            "ce": "CE3",
+            "vrf": "Client_A"
+        }
+    ]
+}

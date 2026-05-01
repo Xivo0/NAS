@@ -5,24 +5,16 @@ import re
 # ---------------------------------------------------------------------------
 # FONCTIONS UTILITAIRES
 # ---------------------------------------------------------------------------
-import re
 
 def parse_router_list(input_str):
-    """
-    Extrait les numéros ou les noms complets (ex: PE1, 1-3).
-    """
+    """Extrait les numéros ou les noms complets (ex: PE1, 1-3)."""
     routers = []
-    # Nettoyage et split
     parts = input_str.replace(" ", "").split(",")
-
     for part in parts:
-        # Cas 1: Déjà un nom complet (ex: PE1, CE2)
         match_named = re.match(r'^([A-Za-z]+)(\d+)$', part)
         if match_named:
             routers.append(part.upper())
             continue
-
-        # Cas 2: Plage numérique (ex: 1-3)
         if "-" in part:
             try:
                 start, end = map(int, part.split("-"))
@@ -30,32 +22,23 @@ def parse_router_list(input_str):
                     routers.append(str(i))
             except ValueError:
                 pass
-        # Cas 3: Numéro simple
         else:
             clean = re.sub(r'[^0-9]', '', part)
-            if clean:
+            if clean.isdigit():
                 routers.append(clean)
-
     return routers
 
 def prefix_routers(routers_raw, role_prefix):
-    """
-    Ajoute simplement le préfixe à chaque numéro de la liste.
-    """
+    """Ajoute le préfixe aux numéros simples et trie la liste."""
     result = []
-    role_prefix = role_prefix.upper()
-
     for r in routers_raw:
         if re.match(r'^\d+$', r):
-            result.append(f"{role_prefix}{r}")
+            result.append(f"{role_prefix.upper()}{r}")
         else:
-            # Si l'utilisateur a déjà écrit "PE1", on le garde
             result.append(r.upper())
-
-    # Nettoyage et tri
+    # Tri numérique intelligent pour éviter PE10 avant PE2
     result = list(set(result))
     result.sort(key=lambda x: (re.sub(r'\d+', '', x), int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0))
-    
     return result
 
 def ask(prompt, default=None):
@@ -65,6 +48,42 @@ def ask(prompt, default=None):
         return val if val else default
     return input(f"{prompt} : ").strip()
 
+
+def configure_vrf_list():
+    """Remplit la section vrf_list avec RD et RT."""
+    print(f"\n{'─'*40}")
+    print("--- DÉFINITION DES VRF (vrf_list) ---")
+    while True:
+        name = ask("Nom de la VRF (ex: Client_A, ou 'q' pour finir)")
+        if name.lower() == 'q': break
+        
+        rd = ask(f"RD pour {name.upper()} ")
+        rt_exp = ask(f"RT Export pour {name.upper()} ")
+        rt_imp = ask(f"RT Import pour {name.upper()}")
+          
+        intent["vrf_list"].append({
+            "name": name, # On garde la casse pour correspondre à l'image
+            "rd": rd,
+            "rt_export": rt_exp,
+            "rt_import": rt_imp
+        })
+
+def configure_vrf_assignments():
+    """Associe les liens PE-CE à une VRF (vrf_assignments)."""
+    print(f"\n{'─'*40}")
+    print("--- ASSIGNATION DES VRF AUX LIENS (vrf_assignments) ---")
+    while True:
+        pe = ask("Nom du PE (ex: PE1, ou 'q' pour finir)").upper()
+        if pe.lower() == 'q': break
+        
+        ce = ask(f"Nom du CE connecté à {pe} (ex: CE1)").upper()
+        vrf_name = ask(f"Nom de la VRF à appliquer sur ce lien (ex: Client_A)")
+        
+        intent["vrf_assignments"].append({
+            "pe": pe,
+            "ce": ce,
+            "vrf": vrf_name
+        })
 
 # ---------------------------------------------------------------------------
 # DÉBUT DU GÉNÉRATEUR
@@ -76,22 +95,20 @@ print("=" * 60)
 
 intent = {
     "project_name": ask("Nom du projet", "Projet_MPLS_IPv4"),
-    "global_options": {},   # plus de préfixes IPv6, gardé pour compatibilité
+    "global_options": {},
     "as_list": [],
+    "vrfs": [], # Section VRF ajoutée
     "bgp_policies": {},
     "external_relationships": [],
-    "ospf_custom_metrics": []
+    "ospf_custom_metrics": [],
+    "vrf_list": [],
+    "vrf_assignments": []
 }
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION DES AS
 # ---------------------------------------------------------------------------
 print("\n--- CONFIGURATION DES AS ---")
-print("Chaque AS regroupe des routeurs de même rôle (P, PE, ou CE).")
-print("Rôles disponibles :")
-print("  P  -> routeurs cœur MPLS (loopback 10.0.0.x)")
-print("  PE -> routeurs de bordure MPLS (loopback 10.123.0.x)")
-print("  CE -> routeurs clients (loopback 10.255.0.x)")
 
 while True:
     print(f"\n{'─'*40}")
@@ -101,118 +118,63 @@ while True:
         break
 
     # --- Rôle ---
-    # --- Rôle ---
     while True:
-        role = ask("Rôle des routeurs de cet AS (P ou CE)").upper()
+        role = ask("Rôle principal de l'AS (P ou CE)").upper()
         if role in ("P", "CE"):
             break
-        print("  Erreur : choisir P ou CE.")
+        print("  Erreur : choisir P (pour Cœur/Bordure MPLS) ou CE (Client).")
 
     all_routers = []
-
     if role == "P":
-        # Saisie pour les routeurs P
-        print(f"  -> Entrez les routeurs de type P (Cœur)")
-        p_input = ask("Liste des routeurs P (ex: 1-3)")
-        p_raw = parse_router_list(p_input)
-        all_routers.extend(prefix_routers(p_raw, "P"))
+        # Saisie dissociée pour les P et les PE
+        print("  -> Configuration des routeurs du Cœur MPLS")
+        p_input = ask("Liste des routeurs P (ex: 1-2)")
+        all_routers.extend(prefix_routers(parse_router_list(p_input), "P"))
 
-        # Saisie pour les routeurs PE
-        print(f"  -> Entrez les routeurs de type PE (Bordure)")
+        print("  -> Configuration des routeurs de Bordure (PE)")
         pe_input = ask("Liste des routeurs PE (ex: 1-5)")
-        pe_raw = parse_router_list(pe_input)
-        all_routers.extend(prefix_routers(pe_raw, "PE"))
+        all_routers.extend(prefix_routers(parse_router_list(pe_input), "PE"))
     else:
-        # Saisie classique pour CE
-        print(f"  -> Entrez les routeurs CE")
-        ce_input = ask("Liste des routeurs CE")
-        ce_raw = parse_router_list(ce_input)
-        all_routers.extend(prefix_routers(ce_raw, "CE"))
+        # Saisie classique pour les CE
+        ce_input = ask("Liste des routeurs CE (ex: 1-3)")
+        all_routers.extend(prefix_routers(parse_router_list(ce_input), "CE"))
 
-    print(f"  -> Routeurs enregistrés : {all_routers}")
-# En IPv4 on attend un préfixe de la forme "10.50" -> annoncé en 10.50.0.0/16
-    default_prefix = f"10.{asn}"
-    prefix = ask(f"Préfixe /16 de l'AS {asn} (ex: 10.{asn} → annonce 10.{asn}.0.0/16)", default_prefix)
-    
-    # --- Protocole IGP ---
-    # Les CE n'ont pas d'IGP interne au cœur MPLS, mais on le demande quand même
-    # pour les CE qui ont plusieurs routeurs et font tourner un IGP entre eux.
-    while True:
-        proto = ask("Protocole IGP (ospf / rip)", "ospf").lower()
-        if proto in ("rip", "ospf"):
-            break
-        print("  Erreur : choisir 'rip' ou 'ospf'.")
-
-    as_obj = {
-        "asn": asn,
-        "role": role,           # NOUVEAU champ utilisé par RESEAUV5_IPv4.py
-        "prefix": prefix,
-        "protocol": proto,
+    intent["as_list"].append({
+        "asn": int(asn) if asn.isdigit() else asn,
+        "role": role,
         "routers": all_routers
-    }
-
-    as_obj["ospf_process_id"] = ask("ID du processus OSPF", "1")
-
-    intent["as_list"].append(as_obj)
-    print(f"  ✔ AS {asn} ({role}) ajouté avec {len(all_routers)} routeur(s).")
-
-
+    })
 # ---------------------------------------------------------------------------
-# RELATIONS eBGP EXTERNES
+# POLITIQUES BGP (Indispensable pour MPLS)
 # ---------------------------------------------------------------------------
 print(f"\n{'─'*40}")
-print("--- RELATIONS EXTERNES (eBGP / PEERING / TRANSIT) ---")
-print("Déclarez chaque lien entre routeurs de deux AS différents.")
-print("La relation est exprimée DU POINT DE VUE du Routeur Source.")
-print("  peer     -> égaux (échange routes clients uniquement)")
-print("  customer -> le routeur SRC est CLIENT du routeur DST")
-print("  provider -> le routeur SRC est FOURNISSEUR du routeur DST")
+intent["bgp_policies"] = {
+    "customer_community": ask("Community Client", "100:10"),
+    "local_pref_customer": int(ask("Local Pref Client", "200")),
+    "local_pref_peer": int(ask("Local Pref Peer", "100")),
+    "local_pref_provider": int(ask("Local Pref Provider", "50"))
+}
 
+# ---------------------------------------------------------------------------
+# RELATIONS eBGP & VRF (Le coeur de la config)
+# ---------------------------------------------------------------------------
+print(f"\n--- RELATIONS eBGP EXTERNES ---")
 while True:
-    print(f"\nAjout d'une relation eBGP  (tapez 'q' pour terminer)")
-    r_src = ask("Routeur Source  (ex: PE1)")
-    if r_src.lower() == 'q':
-        break
+    r_src = ask("Routeur Source (ex: PE1, 'q' pour finir)")
+    if r_src.lower() == 'q': break
     r_dst = ask("Routeur Destination (ex: CE1)")
+    rel_choice = ask("Type (1:peer, 2:customer, 3:provider)", "1")
+    rel = {"1": "peer", "2": "customer", "3": "provider"}.get(rel_choice, "peer")
+    intent["external_relationships"].append({"nodes": [r_src.upper(), r_dst.upper()], "relationship": rel})
 
-    print("  Type : 1. peer   2. customer   3. provider")
-    rel_choice = ask("Choix (1/2/3)", "1")
-    relationship = {"1": "peer", "2": "customer", "3": "provider"}.get(rel_choice, "peer")
-
-    intent["external_relationships"].append({
-        "nodes": [r_src.upper(), r_dst.upper()],
-        "relationship": relationship
-    })
-    print(f"  ✔ {r_src.upper()} ←[{relationship}]→ {r_dst.upper()} enregistré.")
-while True:
-    vrf = ask("\nAjouter une relation d'une VRF ?")
-    vrfRouter = ask("Routeur de la VRF ?")
-    if vrf.lower() == 'q':
-        break
-    else :
-        vrf_router = ask(f"Sur quel routeur PE appliquer {vrf.upper()} ? (ex: PE1)")
-    
-    # On enregistre proprement sans crochets inutiles autour des noms simples
-    intent["vrfs"].append({
-        "name": vrf.upper(),
-        "router": vrf_router.upper()
-    })
-    
-    print(f"   VRF {vrf.upper()} associée à {vrf_router.upper()}")
+# Appel des nouvelles fonctions VRF (celles de l'image)
+configure_vrf_list()
+configure_vrf_assignments()
 
 # ---------------------------------------------------------------------------
 # SAUVEGARDE
 # ---------------------------------------------------------------------------
-output_file = "intent.json"
-with open(output_file, 'w', encoding='utf-8') as f:
+with open("intent.json", 'w', encoding='utf-8') as f:
     json.dump(intent, f, indent=4, ensure_ascii=False)
 
-print(f"\n{'='*60}")
-print(f"  SUCCÈS ! Fichier '{output_file}' généré.")
-print(f"{'='*60}")
-print("\nRécapitulatif :")
-for as_data in intent["as_list"]:
-    print(f"  AS {as_data['asn']:>6} | rôle: {as_data['role']:<3} | "
-          f"IGP: {as_data['protocol']:<5} | routeurs: {as_data['routers']}")
-print(f"\n  Relations eBGP : {len(intent['external_relationships'])}")
-print(f"  Coûts OSPF     : {len(intent['ospf_custom_metrics'])}")
+print(f"\n Le fichier 'intent.json' est prêt.")
