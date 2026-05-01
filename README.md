@@ -16,6 +16,8 @@ Adressage réseau:
   - Routeurs dans réseau MPLS:
     10.1.0.X/30 -> 10.1.X.255/30 quand +64 liens réseau (un réseau = un lien = 2 routeurs)
 
+    Exemple: Premier lien qu'on fait, 10.1.0.0 à 10.1.0.3 sont pris. Puis lien suivant qu'on établit va de 10.1.0.4 à 10.1.0.7. etc.
+
   - Entre PE et CE:
     192.168.0.X/30 -> 192.168.X.255/30 quand +64 liens réseau
   
