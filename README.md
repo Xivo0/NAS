@@ -1,6 +1,6 @@
 # NAS
 
-MPLS/LDP a été implémenté.
+MPLS/LDP ainsi que les VRF avec CE ont été implémentés.
 
 OSPF:
 Router-id:
@@ -15,8 +15,9 @@ Loopback:
 Adressage réseau:
   - Routeurs dans réseau MPLS:
     10.1.0.X/30 -> 10.1.X.255/30 quand +64 liens réseau (un réseau = un lien = 2 routeurs)
+
     Exemple: Premier lien qu'on fait, 10.1.0.0 à 10.1.0.3 sont pris. Puis lien suivant qu'on établit va de 10.1.0.4 à 10.1.0.7. etc. 65e lien -> 10.1.0.255 à 10.1.3.255. .1 et .2 se comparent à l'ID, sinon PE > CE >      P.
-    
+
   - Entre PE et CE:
     192.168.0.X/30 -> 192.168.X.255/30 quand +64 liens réseau
   
