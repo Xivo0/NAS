@@ -1,6 +1,6 @@
 import os
 
-DOSSIER_PROJET = r"/home/louisd/Téléchargements/NASDemo"
+DOSSIER_PROJET = r"/mnt/c/Users/laixa/GNS3/projects/NASDemo"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FICHIER_INTENT = os.path.join(SCRIPT_DIR, "intent.json")
