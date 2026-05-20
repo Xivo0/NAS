@@ -10,7 +10,6 @@ from generators import (
     generate_ospf,
     generate_mpls,
     generate_bgp,
-    generate_eem,
 )
 
 if not os.path.exists(FICHIER_GNS3) or not os.path.exists(FICHIER_INTENT):
@@ -45,9 +44,6 @@ generate_mpls(liste_routeurs, configs, intent)
 
 print("4. Configuration BGP...")
 generate_bgp(liste_routeurs, gns3_data, nodes_map, configs, intent)
-
-print("Génération EEM pour les interfaces actives...")
-generate_eem(liste_routeurs, configs, interfaces_actives)
 
 print("\nINJECTION DES CONFIGURATIONS")
 print(f"Dossier PROJET: {DOSSIER_PROJET}")
