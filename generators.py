@@ -235,32 +235,3 @@ def generate_bgp(liste_routeurs, gns3_data, nodes_map, configs, intent):
                 configs[r] += " exit-address-family\n"
 
         configs[r] += " exit\n"
-
-
-def generate_eem(liste_routeurs, configs, interfaces_actives):
-    for r in liste_routeurs:
-        if not interfaces_actives[r]:
-            continue
-        liste_int = ", ".join(interfaces_actives[r])
-        configs[r] += f"""
-!
-! EEM Applet 1 — Activation retardée des interfaces (25s)
-event manager applet GNS3_AUTO_NOSHUT
- event timer countdown time 25
- action 1.0 cli command "enable"
- action 2.0 cli command "configure terminal"
- action 3.0 cli command "interface range {liste_int}"
- action 4.0 cli command "no shutdown"
- action 5.0 cli command "end"
-!
-! EEM Applet 2 — Revalidation complète des interfaces (40s)
-event manager applet GNS3_INTERFACE_REFRESH
- event timer countdown time 40
- action 1.0 cli command "enable"
- action 2.0 cli command "configure terminal"
- action 3.0 cli command "interface range {liste_int}"
- action 4.0 cli command "shutdown"
- action 5.0 cli command "no shutdown"
- action 6.0 cli command "end"
-!
-"""
